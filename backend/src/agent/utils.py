@@ -1,5 +1,27 @@
+# -*- encoding: utf-8 -*-
+"""
+@Time    :   2025-06-11 22:11:52
+@desc    :
+@Author  :   ticoAg
+@Contact :   1627635056@qq.com
+"""
+
+import asyncio
+import os
+import urllib.parse
 from typing import Any, Dict, List
-from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
+
+import requests
+from crawl4ai import AsyncWebCrawler
+from firecrawl import FirecrawlApp, ScrapeOptions
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from loguru import logger
+from lxml import html
+
+FIRECRAWL_KEY = os.getenv("FIRECRAWL_API_KEY")
+if not FIRECRAWL_KEY:
+    raise ValueError("FIRECRAWL_API_KEY environment variable is not set.")
+crawl_app = FirecrawlApp(api_key=FIRECRAWL_KEY)
 
 
 def get_research_topic(messages: List[AnyMessage]) -> str:
@@ -34,6 +56,67 @@ def resolve_urls(urls_to_resolve: List[Any], id: int) -> Dict[str, str]:
             resolved_map[url] = f"{prefix}{id}-{idx}"
 
     return resolved_map
+
+
+class UrlParser:
+    def __init__(self, url):
+        self.url = url
+        self.parsed_url = urllib.parse.urlparse(url)
+        self.domain = self.parsed_url.netloc
+
+    def fetch_content(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(self.url, headers=headers)
+        if response.status_code == 200:
+            return response.text
+        else:
+            raise Exception(
+                f"Failed to fetch content from {self.url}, status code: {response.status_code}"
+            )
+
+    def default_parser(self) -> str:
+        """ # NOTE FirecrawlApp 实测效果不太行"""
+        crawl_result = crawl_app.crawl_url(
+            self.url, limit=10, scrape_options=ScrapeOptions(formats=["markdown"])
+        )
+        result = "\n".join([i.markdown for i in crawl_result.data])
+        return result
+
+    async def crawl4ai_parser(self) -> str:
+        """# NOTE 建议使用crawl4ai
+        run `playwright install first` """
+        try:
+            async with AsyncWebCrawler() as crawler:
+                result = await crawler.arun(url=self.url)
+                return result.markdown
+        except Exception as e:
+            logger.exception(f"Error while crawling {self.url} with crawl4ai: {e}")
+            return ""
+
+    def get_parser(self):
+        # 根据域名返回对应的解析方法
+        match self.domain:
+            case _:
+                return self.crawl4ai_parser
+            # case _:
+            #     return self.default_parser
+
+    def crawl(self):
+        """
+        Crawl the given URL and return the parsed content.
+        """
+        parser = self.get_parser()
+
+        if parser is self.default_parser:
+            # 使用 FireCrawl 的默认解析方式
+            result = parser()
+        else:
+            # 使用自定义解析器（如 Zhihu 解析器）
+            result = asyncio.run(parser())
+
+        return result
 
 
 def insert_citation_markers(text, citations_list):

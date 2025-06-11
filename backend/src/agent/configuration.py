@@ -1,42 +1,43 @@
 import os
-from pydantic import BaseModel, Field
 from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel, Field
 
 
 class Configuration(BaseModel):
     """The configuration for the agent."""
 
     query_generator_model: str = Field(
-        default="gemini-2.0-flash",
-        metadata={
-            "description": "The name of the language model to use for the agent's query generation."
-        },
+        default="qwen-turbo-latest",
+        description="The name of the language model to use for the agent's query generation.",
     )
 
     reflection_model: str = Field(
-        default="gemini-2.5-flash-preview-04-17",
-        metadata={
-            "description": "The name of the language model to use for the agent's reflection."
-        },
+        default="qwen-turbo-latest",
+        description="The name of the language model to use for the agent's reflection.",
     )
 
     answer_model: str = Field(
-        default="gemini-2.5-pro-preview-05-06",
-        metadata={
-            "description": "The name of the language model to use for the agent's answer."
-        },
+        default="qwen-turbo-latest",
+        description="The name of the language model to use for the agent's answer.",
+    )
+    reasoning_model: str = Field(
+        default="qwen-plus-latest",
+        description="The name of the language model to use for the agent's reasoning.",
     )
 
     number_of_initial_queries: int = Field(
-        default=3,
-        metadata={"description": "The number of initial search queries to generate."},
+        default=3, description="The number of initial search queries to generate."
     )
 
     max_research_loops: int = Field(
-        default=2,
-        metadata={"description": "The maximum number of research loops to perform."},
+        default=2, description="The maximum number of research loops to perform."
+    )
+
+    ddgs_proxy: Optional[str] = Field(
+        default="http://127.0.0.1:7891",
+        description="The proxy URL for the DDG search engine.",
     )
 
     @classmethod

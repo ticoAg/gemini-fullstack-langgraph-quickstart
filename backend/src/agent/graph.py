@@ -1,30 +1,30 @@
 import os
+from urllib.parse import urlparse
 
-from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
+from duckduckgo_search import DDGS
 from langchain_core.messages import AIMessage
-from langgraph.types import Send
-from langgraph.graph import StateGraph
-from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from google.genai import Client
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
+from agent.configuration import Configuration
+from agent.prompts import (
+    answer_instructions,
+    get_current_date,
+    query_writer_instructions_zh,
+    reflection_instructions_zh,
+)
 from agent.state import (
     OverallState,
     QueryGenerationState,
     ReflectionState,
     WebSearchState,
 )
-from agent.configuration import Configuration
-from agent.prompts import (
-    get_current_date,
-    query_writer_instructions,
-    web_searcher_instructions,
-    reflection_instructions,
-    answer_instructions,
-)
-from langchain_google_genai import ChatGoogleGenerativeAI
+from agent.tools_and_schemas import Reflection, SearchQueryList
 from agent.utils import (
+    UrlParser,
     get_citations,
     get_research_topic,
     insert_citation_markers,
@@ -33,11 +33,14 @@ from agent.utils import (
 
 load_dotenv()
 
-if os.getenv("GEMINI_API_KEY") is None:
-    raise ValueError("GEMINI_API_KEY is not set")
+if os.getenv("OPENAI_API_KEY") is None:
+    raise ValueError("OPENAI_API_KEY is not set")
 
 # Used for Google Search API
-genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
+# genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+OPNEAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "empty")
 
 
 # Nodes
@@ -61,23 +64,24 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
     # init Gemini 2.0 Flash
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatOpenAI(
         model=configurable.query_generator_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url=OPNEAI_BASE_URL,
+        api_key=OPENAI_API_KEY,
     )
     structured_llm = llm.with_structured_output(SearchQueryList)
 
     # Format the prompt
     current_date = get_current_date()
-    formatted_prompt = query_writer_instructions.format(
+    formatted_prompt = query_writer_instructions_zh.format(
         current_date=current_date,
         research_topic=get_research_topic(state["messages"]),
         number_queries=state["initial_search_query_count"],
     )
     # Generate the search queries
-    result = structured_llm.invoke(formatted_prompt)
+    result: SearchQueryList = structured_llm.invoke(formatted_prompt)
     return {"query_list": result.query}
 
 
@@ -92,10 +96,27 @@ def continue_to_web_research(state: QueryGenerationState):
     ]
 
 
-def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
+def extract_relevant_content(full_content: str, query: str) -> str:
+    prompt = (
+        full_content
+        + f"\n\n# Task\n提取上文中与问题有关的内容,输出相关的原文\n\nQuery:{query}"
+    )
 
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+    llm = ChatOpenAI(
+        model="qwen-turbo-latest",
+        temperature=0,
+        max_retries=2,
+        base_url=OPNEAI_BASE_URL,
+        api_key=OPENAI_API_KEY,
+    )
+    result = llm.invoke(prompt)
+    return result.content
+
+
+def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
+    """LangGraph node that performs web research using DuckDuckGo Search and Jina Reader API.
+
+    Executes a web search using DuckDuckGo and parses results with Jina Reader API.
 
     Args:
         state: Current graph state containing the search query and research loop count
@@ -106,34 +127,50 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     """
     # Configure
     configurable = Configuration.from_runnable_config(config)
-    formatted_prompt = web_searcher_instructions.format(
-        current_date=get_current_date(),
-        research_topic=state["search_query"],
-    )
 
-    # Uses the google genai client as the langchain client doesn't return grounding metadata
-    response = genai_client.models.generate_content(
-        model=configurable.query_generator_model,
-        contents=formatted_prompt,
-        config={
-            "tools": [{"google_search": {}}],
-            "temperature": 0,
-        },
-    )
-    # resolve the urls to short urls for saving tokens and time
-    resolved_urls = resolve_urls(
-        response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
-    )
-    # Gets the citations and adds them to the generated text
-    citations = get_citations(response, resolved_urls)
-    modified_text = insert_citation_markers(response.text, citations)
-    sources_gathered = [item for citation in citations for item in citation["segments"]]
+    # 使用DuckDuckGo搜索
+    # TODO 可能会遇到Rate limit, ddgs免费版本有频率限制
+    ddgs = DDGS(proxy=configurable.ddgs_proxy)
+    results = ddgs.text(state["search_query"], max_results=1)  # 获取5个结果
 
-    return {
-        "sources_gathered": sources_gathered,
-        "search_query": [state["search_query"]],
-        "web_research_result": [modified_text],
-    }
+    # 解析每个结果
+    parsed_results = []
+    sources_gathered = []
+
+    for idx, result in enumerate(results):
+        url = result["href"]
+        title = result["title"]
+        snippet = result["body"]
+
+        full_content = UrlParser(url).crawl()
+        relevant_content = extract_relevant_content(full_content, state["search_query"])
+        # 创建引用标记
+        citation_marker = f"[{idx + 1}]"
+
+        # 收集来源信息
+        sources_gathered.append(
+            {
+                "id": idx,
+                "title": title,
+                "short_url": f"https://{urlparse(url).netloc}",
+                "value": url,
+                "full_content": full_content,
+                "useful_content": relevant_content,
+            }
+        )
+
+        # 组合搜索摘要和完整内容
+        parsed_results.append(
+            f"{citation_marker} {title}\nSnippet: {snippet}\nContent: {relevant_content}"  # 限制内容长度
+        )
+
+    return OverallState(
+        **{
+            "sources_gathered": sources_gathered,
+            "search_query": [state["search_query"]],
+            "web_research_result": parsed_results,
+        }
+    )
 
 
 def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
@@ -157,19 +194,20 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
 
     # Format the prompt
     current_date = get_current_date()
-    formatted_prompt = reflection_instructions.format(
+    formatted_prompt = reflection_instructions_zh.format(
         current_date=current_date,
         research_topic=get_research_topic(state["messages"]),
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
     # init Reasoning Model
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatOpenAI(
         model=reasoning_model,
-        temperature=1.0,
+        temperature=0.7,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url=OPNEAI_BASE_URL,
+        api_key=OPENAI_API_KEY,
     )
-    result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
+    result: Reflection = llm.with_structured_output(Reflection).invoke(formatted_prompt)
 
     return {
         "is_sufficient": result.is_sufficient,
@@ -180,10 +218,7 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     }
 
 
-def evaluate_research(
-    state: ReflectionState,
-    config: RunnableConfig,
-) -> OverallState:
+def evaluate_research(state: ReflectionState, config: RunnableConfig) -> OverallState:
     """LangGraph routing function that determines the next step in the research flow.
 
     Controls the research loop by deciding whether to continue gathering information
@@ -242,11 +277,12 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     )
 
     # init Reasoning Model, default to Gemini 2.5 Flash
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatOpenAI(
         model=reasoning_model,
         temperature=0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url=OPNEAI_BASE_URL,
+        api_key=OPENAI_API_KEY,
     )
     result = llm.invoke(formatted_prompt)
 
