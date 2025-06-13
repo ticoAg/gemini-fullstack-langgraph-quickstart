@@ -9,31 +9,27 @@ class Configuration(BaseModel):
     """The configuration for the agent."""
 
     query_generator_model: str = Field(
-        default="qwen-turbo-latest",
+        default="doubao-seed-1-6-250615",
         description="The name of the language model to use for the agent's query generation.",
     )
 
     reflection_model: str = Field(
-        default="qwen-turbo-latest",
+        default="doubao-seed-1-6-250615",
         description="The name of the language model to use for the agent's reflection.",
     )
 
     answer_model: str = Field(
-        default="qwen-turbo-latest",
+        default="doubao-seed-1-6-250615",
         description="The name of the language model to use for the agent's answer.",
     )
     reasoning_model: str = Field(
-        default="qwen-plus-latest",
+        default="doubao-seed-1-6-thinking-250615",
         description="The name of the language model to use for the agent's reasoning.",
     )
 
-    number_of_initial_queries: int = Field(
-        default=3, description="The number of initial search queries to generate."
-    )
+    number_of_initial_queries: int = Field(default=3, description="The number of initial search queries to generate.")
 
-    max_research_loops: int = Field(
-        default=2, description="The maximum number of research loops to perform."
-    )
+    max_research_loops: int = Field(default=2, description="The maximum number of research loops to perform.")
 
     ddgs_proxy: Optional[str] = Field(
         default="http://127.0.0.1:7891",
@@ -41,18 +37,13 @@ class Configuration(BaseModel):
     )
 
     @classmethod
-    def from_runnable_config(
-        cls, config: Optional[RunnableConfig] = None
-    ) -> "Configuration":
+    def from_runnable_config(cls, config: Optional[RunnableConfig] = None) -> "Configuration":
         """Create a Configuration instance from a RunnableConfig."""
-        configurable = (
-            config["configurable"] if config and "configurable" in config else {}
-        )
+        configurable = config["configurable"] if config and "configurable" in config else {}
 
         # Get raw values from environment or config
         raw_values: dict[str, Any] = {
-            name: os.environ.get(name.upper(), configurable.get(name))
-            for name in cls.model_fields.keys()
+            name: os.environ.get(name.upper(), configurable.get(name)) for name in cls.model_fields.keys()
         }
 
         # Filter out None values

@@ -1,22 +1,21 @@
-# -*- encoding: utf-8 -*-
 """
 @Time    :   2025-06-11 22:11:52
 @desc    :
 @Author  :   ticoAg
-@Contact :   1627635056@qq.com
-"""
+@Contact :   1627635056@qq.com.
+"""  # noqa: D205, D212
 
 import asyncio
+import json
 import os
 import urllib.parse
-from typing import Any, Dict, List
+from typing import List
 
 import requests
 from crawl4ai import AsyncWebCrawler
 from firecrawl import FirecrawlApp, ScrapeOptions
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from loguru import logger
-from lxml import html
 
 FIRECRAWL_KEY = os.getenv("FIRECRAWL_API_KEY")
 if not FIRECRAWL_KEY:
@@ -25,9 +24,7 @@ crawl_app = FirecrawlApp(api_key=FIRECRAWL_KEY)
 
 
 def get_research_topic(messages: List[AnyMessage]) -> str:
-    """
-    Get the research topic from the messages.
-    """
+    """Get the research topic from the messages."""
     # check if request has a history and combine the messages into a single string
     if len(messages) == 1:
         research_topic = messages[-1].content
@@ -39,23 +36,6 @@ def get_research_topic(messages: List[AnyMessage]) -> str:
             elif isinstance(message, AIMessage):
                 research_topic += f"Assistant: {message.content}\n"
     return research_topic
-
-
-def resolve_urls(urls_to_resolve: List[Any], id: int) -> Dict[str, str]:
-    """
-    Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
-    Ensures each original URL gets a consistent shortened form while maintaining uniqueness.
-    """
-    prefix = f"https://vertexaisearch.cloud.google.com/id/"
-    urls = [site.web.uri for site in urls_to_resolve]
-
-    # Create a dictionary that maps each unique URL to its first occurrence index
-    resolved_map = {}
-    for idx, url in enumerate(urls):
-        if url not in resolved_map:
-            resolved_map[url] = f"{prefix}{id}-{idx}"
-
-    return resolved_map
 
 
 class UrlParser:
@@ -72,30 +52,30 @@ class UrlParser:
         if response.status_code == 200:
             return response.text
         else:
-            raise Exception(
-                f"Failed to fetch content from {self.url}, status code: {response.status_code}"
-            )
+            raise Exception(f"Failed to fetch content from {self.url}, status code: {response.status_code}")
 
     def default_parser(self) -> str:
-        """ # NOTE FirecrawlApp 实测效果不太行"""
-        crawl_result = crawl_app.crawl_url(
-            self.url, limit=10, scrape_options=ScrapeOptions(formats=["markdown"])
-        )
+        """# NOTE FirecrawlApp 实测效果不太行."""
+        crawl_result = crawl_app.crawl_url(self.url, limit=10, scrape_options=ScrapeOptions(formats=["markdown"]))
         result = "\n".join([i.markdown for i in crawl_result.data])
         return result
 
     async def crawl4ai_parser(self) -> str:
-        """# NOTE 建议使用crawl4ai
-        run `playwright install first` """
+        """建议使用crawl4ai.
+
+        run `playwright install first`
+        """
         try:
             async with AsyncWebCrawler() as crawler:
                 result = await crawler.arun(url=self.url)
                 return result.markdown
         except Exception as e:
-            logger.exception(f"Error while crawling {self.url} with crawl4ai: {e}")
+            # logger.exception(f"Error while crawling {self.url} with crawl4ai: {e}")
+            logger.error(f"Error while crawling {self.url} with crawl4ai: {repr(e)}")
             return ""
 
     def get_parser(self):
+        """获取解析器."""
         # 根据域名返回对应的解析方法
         match self.domain:
             case _:
@@ -104,9 +84,7 @@ class UrlParser:
             #     return self.default_parser
 
     def crawl(self):
-        """
-        Crawl the given URL and return the parsed content.
-        """
+        """Crawl the given URL and return the parsed content."""
         parser = self.get_parser()
 
         if parser is self.default_parser:
@@ -120,8 +98,7 @@ class UrlParser:
 
 
 def insert_citation_markers(text, citations_list):
-    """
-    Inserts citation markers into a text string based on start and end indices.
+    """Inserts citation markers into a text string based on start and end indices.
 
     Args:
         text (str): The original text string.
@@ -132,14 +109,12 @@ def insert_citation_markers(text, citations_list):
 
     Returns:
         str: The text with citation markers inserted.
-    """
+    """  # noqa: D401
     # Sort citations by end_index in descending order.
     # If end_index is the same, secondary sort by start_index descending.
     # This ensures that insertions at the end of the string don't affect
     # the indices of earlier parts of the string that still need to be processed.
-    sorted_citations = sorted(
-        citations_list, key=lambda c: (c["end_index"], c["start_index"]), reverse=True
-    )
+    sorted_citations = sorted(citations_list, key=lambda c: (c["end_index"], c["start_index"]), reverse=True)
 
     modified_text = text
     for citation_info in sorted_citations:
@@ -151,16 +126,13 @@ def insert_citation_markers(text, citations_list):
         for segment in citation_info["segments"]:
             marker_to_insert += f" [{segment['label']}]({segment['short_url']})"
         # Insert the citation marker at the original end_idx position
-        modified_text = (
-            modified_text[:end_idx] + marker_to_insert + modified_text[end_idx:]
-        )
+        modified_text = modified_text[:end_idx] + marker_to_insert + modified_text[end_idx:]
 
     return modified_text
 
 
 def get_citations(response, resolved_urls_map):
-    """
-    Extracts and formats citation information from a Gemini model's response.
+    """Extracts and formats citation information from a Gemini model's response.
 
     This function processes the grounding metadata provided in the response to
     construct a list of citation objects. Each citation object includes the
@@ -187,7 +159,7 @@ def get_citations(response, resolved_urls_map):
                                         formatted links for the citation.
               Returns an empty list if no valid candidates or grounding supports
               are found, or if essential data is missing.
-    """
+    """  # noqa: D401
     citations = []
 
     # Ensure response and necessary nested structures are present
@@ -209,11 +181,7 @@ def get_citations(response, resolved_urls_map):
         if not hasattr(support, "segment") or support.segment is None:
             continue  # Skip this support if segment info is missing
 
-        start_index = (
-            support.segment.start_index
-            if support.segment.start_index is not None
-            else 0
-        )
+        start_index = support.segment.start_index if support.segment.start_index is not None else 0
 
         # Ensure end_index is present to form a valid segment
         if support.segment.end_index is None:
@@ -225,10 +193,7 @@ def get_citations(response, resolved_urls_map):
         citation["end_index"] = support.segment.end_index
 
         citation["segments"] = []
-        if (
-            hasattr(support, "grounding_chunk_indices")
-            and support.grounding_chunk_indices
-        ):
+        if hasattr(support, "grounding_chunk_indices") and support.grounding_chunk_indices:
             for ind in support.grounding_chunk_indices:
                 try:
                     chunk = candidate.grounding_metadata.grounding_chunks[ind]
@@ -247,3 +212,24 @@ def get_citations(response, resolved_urls_map):
                     pass
         citations.append(citation)
     return citations
+
+
+def bochaai_web_search(query: str, summary: bool = True, count: int = 3) -> list:
+    """第三方搜索API封装."""
+    url = "https://api.bochaai.com/v1/web-search"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('BOCHAAI_API_KEY')}",
+        "Content-Type": "application/json",
+    }
+    payload = json.dumps(
+        {"query": query, "summary": summary, "count": count, "exclude": "book118.com"},
+        ensure_ascii=False,
+    )
+
+    response = requests.post(url, headers=headers, data=payload)
+    response.raise_for_status()
+    result = response.json()
+    if result.get("data") and result["data"].get("webPages") and result["data"]["webPages"].get("value"):
+        return result["data"]["webPages"]["value"]
+    else:
+        return []

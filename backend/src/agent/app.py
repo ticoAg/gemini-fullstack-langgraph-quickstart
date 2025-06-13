@@ -9,20 +9,17 @@ app = FastAPI()
 
 
 def create_frontend_router(build_dir="../frontend/dist"):
-    """Creates a router to serve the React frontend.
+    """Create a router to serve the React frontend. a router to serve the React frontend.
 
-    Args:
+    Args : 
         build_dir: Path to the React build directory relative to this file.
-
-    Returns:
+    Returns :
         A Starlette application serving the frontend.
     """
     build_path = pathlib.Path(__file__).parent.parent.parent / build_dir
 
     if not build_path.is_dir() or not (build_path / "index.html").is_file():
-        print(
-            f"WARN: Frontend build directory not found or incomplete at {build_path}. Serving frontend will likely fail."
-        )
+        print(f"WARN: Frontend build directory not found or incomplete at {build_path}. Serving frontend will likely fail.")
         # Return a dummy router if build isn't ready
         from starlette.routing import Route
 

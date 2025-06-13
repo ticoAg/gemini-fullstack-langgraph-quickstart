@@ -20,6 +20,7 @@ dependencies = [
     "google-genai",
     "langchain-openai>=0.3.22",
     "loguru>=0.7.3",
+    "langsmith>=0.3.45",
 ]
 
 
@@ -49,7 +50,7 @@ lint.ignore = [
     "D417",
     "E501",
 ]
-lint.line-length = 128
+line-length = 128
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "UP"]
 [tool.ruff.lint.pydocstyle]

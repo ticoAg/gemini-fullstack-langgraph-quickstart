@@ -1,8 +1,8 @@
 import os
 from urllib.parse import urlparse
 
+import openai
 from dotenv import load_dotenv
-from duckduckgo_search import DDGS
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -25,10 +25,10 @@ from agent.state import (
 from agent.tools_and_schemas import Reflection, SearchQueryList
 from agent.utils import (
     UrlParser,
+    bochaai_web_search,
     get_citations,
     get_research_topic,
     insert_citation_markers,
-    resolve_urls,
 )
 
 load_dotenv()
@@ -47,7 +47,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "empty")
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates a search queries based on the User's question.
 
-    Uses Gemini 2.0 Flash to create an optimized search query for web research based on
+    Uses Seed 1.6 to create an optimized search query for web research based on
     the User's question.
 
     Args:
@@ -63,7 +63,6 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     if state.get("initial_search_query_count") is None:
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
-    # init Gemini 2.0 Flash
     llm = ChatOpenAI(
         model=configurable.query_generator_model,
         temperature=1.0,
@@ -97,13 +96,11 @@ def continue_to_web_research(state: QueryGenerationState):
 
 
 def extract_relevant_content(full_content: str, query: str) -> str:
-    prompt = (
-        full_content
-        + f"\n\n# Task\n提取上文中与问题有关的内容,输出相关的原文\n\nQuery:{query}"
-    )
+    """从全文中提取与问题相关的内容."""
+    prompt = full_content + f"\n\n# Task\n提取上文中与问题有关的内容,直接输出相关的原文\n\nQuery:{query}"
 
     llm = ChatOpenAI(
-        model="qwen-turbo-latest",
+        model="doubao-seed-1-6-250615",
         temperature=0,
         max_retries=2,
         base_url=OPNEAI_BASE_URL,
@@ -128,22 +125,22 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     # Configure
     configurable = Configuration.from_runnable_config(config)
 
-    # 使用DuckDuckGo搜索
-    # TODO 可能会遇到Rate limit, ddgs免费版本有频率限制
-    ddgs = DDGS(proxy=configurable.ddgs_proxy)
-    results = ddgs.text(state["search_query"], max_results=1)  # 获取5个结果
+    # 调用新的搜索API
+    search_results = bochaai_web_search(query=state["search_query"], summary=True, count=5)
 
-    # 解析每个结果
     parsed_results = []
     sources_gathered = []
 
-    for idx, result in enumerate(results):
-        url = result["href"]
-        title = result["title"]
-        snippet = result["body"]
-
-        full_content = UrlParser(url).crawl()
-        relevant_content = extract_relevant_content(full_content, state["search_query"])
+    for idx, result in enumerate(search_results):
+        url = result.get("url")
+        title = result.get("name")
+        snippet = result.get("snippet")
+        url_parser = UrlParser(url)
+        if not url_parser.domain == "bochaai.com":
+            full_content = url_parser.crawl()
+            relevant_content = extract_relevant_content(full_content, state["search_query"])
+        else:
+            full_content = relevant_content = result.get("summary")
         # 创建引用标记
         citation_marker = f"[{idx + 1}]"
 
@@ -233,9 +230,7 @@ def evaluate_research(state: ReflectionState, config: RunnableConfig) -> Overall
     """
     configurable = Configuration.from_runnable_config(config)
     max_research_loops = (
-        state.get("max_research_loops")
-        if state.get("max_research_loops") is not None
-        else configurable.max_research_loops
+        state.get("max_research_loops") if state.get("max_research_loops") is not None else configurable.max_research_loops
     )
     if state["is_sufficient"] or state["research_loop_count"] >= max_research_loops:
         return "finalize_answer"
@@ -276,7 +271,7 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
-    # init Reasoning Model, default to Gemini 2.5 Flash
+    # init Reasoning Model, default to doubao-seed-1-6-thinking-250615
     llm = ChatOpenAI(
         model=reasoning_model,
         temperature=0,
@@ -290,9 +285,7 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     unique_sources = []
     for source in state["sources_gathered"]:
         if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
+            result.content = result.content.replace(source["short_url"], source["value"])
             unique_sources.append(source)
 
     return {
@@ -314,15 +307,11 @@ builder.add_node("finalize_answer", finalize_answer)
 # This means that this node is the first one called
 builder.add_edge(START, "generate_query")
 # Add conditional edge to continue with search queries in a parallel branch
-builder.add_conditional_edges(
-    "generate_query", continue_to_web_research, ["web_research"]
-)
+builder.add_conditional_edges("generate_query", continue_to_web_research, ["web_research"])
 # Reflect on the web research
 builder.add_edge("web_research", "reflection")
 # Evaluate the research
-builder.add_conditional_edges(
-    "reflection", evaluate_research, ["web_research", "finalize_answer"]
-)
+builder.add_conditional_edges("reflection", evaluate_research, ["web_research", "finalize_answer"])
 # Finalize the answer
 builder.add_edge("finalize_answer", END)
 
