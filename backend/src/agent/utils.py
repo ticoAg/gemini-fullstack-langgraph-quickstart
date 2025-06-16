@@ -222,7 +222,7 @@ def bochaai_web_search(query: str, summary: bool = True, count: int = 3) -> list
         "Content-Type": "application/json",
     }
     payload = json.dumps(
-        {"query": query, "summary": summary, "count": count, "exclude": "book118.com"},
+        {"query": query, "summary": summary, "count": count, "exclude": "book118.com|doc88.com|zixin.com.cn"},
         ensure_ascii=False,
     )
 

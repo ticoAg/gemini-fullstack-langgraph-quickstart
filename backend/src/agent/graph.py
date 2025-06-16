@@ -97,7 +97,12 @@ def continue_to_web_research(state: QueryGenerationState):
 
 def extract_relevant_content(full_content: str, query: str) -> str:
     """从全文中提取与问题相关的内容."""
-    prompt = full_content + f"\n\n# Task\n提取上文中与问题有关的内容,直接输出相关的原文\n\nQuery:{query}"
+    prompt = (
+        f"{full_content}\n\n"
+        f"# Task\n"
+        f"提取上文中与问题有关的内容,直接输出相关的原文,若无相关内容,输出: None\n\n"
+        f"Query:{query}"  # ruff: no-hint
+    )
 
     llm = ChatOpenAI(
         model="doubao-seed-1-6-250615",
